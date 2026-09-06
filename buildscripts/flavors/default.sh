@@ -223,6 +223,7 @@ cpuflags=
 	--enable-filter=overlay \
 	--enable-filter=equalizer \
 	--enable-filter=aresample \
+	--enable-filter=astats \
 	\
 	--enable-protocol=async \
 	--enable-protocol=cache \
