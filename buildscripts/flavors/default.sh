@@ -12,6 +12,51 @@ else
 	exit 255
 fi
 
+# ---------------------------------------------------------------------------
+# Lumen DSP filter
+#
+# WHY THIS IS DONE HERE AND NOT AS A PATCH FILE
+#
+# FFmpeg is downloaded fresh, so anything edited inside it by hand is wiped on
+# the next build. The registration has to be performed BY the build, every time.
+#
+# patch.sh exists for this, but a .patch applies against exact line numbers and
+# breaks the moment FFmpeg's own files shift. These edits are idempotent
+# appends guarded by a grep, so they apply cleanly to any FFmpeg 6.x and can be
+# run twice with no effect the second time.
+#
+# The whole thing is skipped if the source file is absent, so a checkout
+# without it still builds exactly as before.
+# ---------------------------------------------------------------------------
+lumen_src="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/patches/af_lumendsp.c"
+
+if [ -f "$lumen_src" ]; then
+	echo "Lumen: installing af_lumendsp.c"
+	cp "$lumen_src" libavfilter/af_lumendsp.c
+
+	# 1. declare the filter
+	if ! grep -q "ff_af_lumendsp" libavfilter/allfilters.c; then
+		echo "extern const AVFilter ff_af_lumendsp;" >> libavfilter/allfilters.c
+		echo "Lumen: registered in allfilters.c"
+	fi
+
+	# 2. add it to the build
+	if ! grep -q "af_lumendsp.o" libavfilter/Makefile; then
+		echo 'OBJS-$(CONFIG_LUMENDSP_FILTER) += af_lumendsp.o' >> libavfilter/Makefile
+		echo "Lumen: added to libavfilter/Makefile"
+	fi
+
+	# 3. declare it to configure, so CONFIG_LUMENDSP_FILTER is generated
+	if ! grep -q "lumendsp_filter" configure; then
+		sed -i 's/^    loudnorm_filter/    lumendsp_filter\n    loudnorm_filter/' configure
+		echo "Lumen: declared in configure"
+	fi
+
+	grep -q "lumendsp_filter" configure || { echo "Lumen: FAILED to declare filter"; exit 1; }
+else
+	echo "Lumen: patches/af_lumendsp.c not found, building without it"
+fi
+
 mkdir -p _build$ndk_suffix
 cd _build$ndk_suffix
 
@@ -224,6 +269,7 @@ cpuflags=
 	--enable-filter=equalizer \
 	--enable-filter=aresample \
 	--enable-filter=astats \
+	--enable-filter=lumendsp \
 	\
 	--enable-protocol=async \
 	--enable-protocol=cache \
