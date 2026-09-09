@@ -15,18 +15,14 @@ fi
 # ---------------------------------------------------------------------------
 # Lumen DSP filter
 #
-# WHY THIS IS DONE HERE AND NOT AS A PATCH FILE
+# FFmpeg is downloaded/prepared by the build, so the custom filter must be
+# installed and registered every time before configure runs.
 #
-# FFmpeg is downloaded fresh, so anything edited inside it by hand is wiped on
-# the next build. The registration has to be performed BY the build, every time.
-#
-# patch.sh exists for this, but a .patch applies against exact line numbers and
-# breaks the moment FFmpeg's own files shift. These edits are idempotent
-# appends guarded by a grep, so they apply cleanly to any FFmpeg 6.x and can be
-# run twice with no effect the second time.
-#
-# The whole thing is skipped if the source file is absent, so a checkout
-# without it still builds exactly as before.
+# IMPORTANT:
+# allfilters.c includes the generated libavfilter/filter_list.c near its end.
+# The ff_af_lumendsp declaration MUST appear BEFORE that include. Appending the
+# declaration to the end of allfilters.c is too late and causes:
+#   use of undeclared identifier 'ff_af_lumendsp'
 # ---------------------------------------------------------------------------
 lumen_src="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/patches/af_lumendsp.c"
 
@@ -34,43 +30,39 @@ if [ -f "$lumen_src" ]; then
 	echo "Lumen: installing af_lumendsp.c"
 	cp "$lumen_src" libavfilter/af_lumendsp.c
 
-	# 1. declare the filter
-	if ! grep -q "ff_af_lumendsp" libavfilter/allfilters.c; then
-		echo "extern const AVFilter ff_af_lumendsp;" >> libavfilter/allfilters.c
-		echo "Lumen: registered in allfilters.c"
+	# 1. Declare the filter BEFORE filter_list.c is included.
+	# Remove any old declaration first. This also repairs a reused source tree
+	# where an earlier script appended the declaration at the very end.
+	sed -i '/^[[:space:]]*extern const AVFilter ff_af_lumendsp;[[:space:]]*$/d' libavfilter/allfilters.c
+
+	if grep -q '^[[:space:]]*extern const AVFilter ff_af_ladspa;' libavfilter/allfilters.c; then
+		sed -i '/^[[:space:]]*extern const AVFilter ff_af_ladspa;/a extern const AVFilter ff_af_lumendsp;' libavfilter/allfilters.c
+	elif grep -q '^[[:space:]]*#include "libavfilter/filter_list.c"' libavfilter/allfilters.c; then
+		sed -i '/^[[:space:]]*#include "libavfilter\/filter_list.c"/i extern const AVFilter ff_af_lumendsp;' libavfilter/allfilters.c
+	else
+		echo "Lumen: FAILED - could not find a safe insertion point in libavfilter/allfilters.c"
+		exit 1
 	fi
 
-	# 2. add it to the build
-	if ! grep -q "af_lumendsp.o" libavfilter/Makefile; then
+	# Verify the declaration exists and is before filter_list.c.
+	lumen_decl_line=$(grep -n '^[[:space:]]*extern const AVFilter ff_af_lumendsp;' libavfilter/allfilters.c | head -n 1 | cut -d: -f1)
+	filter_list_line=$(grep -n '^[[:space:]]*#include "libavfilter/filter_list.c"' libavfilter/allfilters.c | head -n 1 | cut -d: -f1)
+
+	if [ -z "$lumen_decl_line" ] || [ -z "$filter_list_line" ] || [ "$lumen_decl_line" -ge "$filter_list_line" ]; then
+		echo "Lumen: FAILED - ff_af_lumendsp declaration is missing or placed after filter_list.c"
+		exit 1
+	fi
+	echo "Lumen: registered in allfilters.c before filter_list.c"
+
+	# 2. Add the custom source object to libavfilter's build.
+	if ! grep -q 'af_lumendsp.o' libavfilter/Makefile; then
 		echo 'OBJS-$(CONFIG_LUMENDSP_FILTER) += af_lumendsp.o' >> libavfilter/Makefile
 		echo "Lumen: added to libavfilter/Makefile"
 	fi
 
-	# 3. NOTHING TO DO. configure DERIVES THE LIST ITSELF.
-	#
-	# Three attempts were spent editing configure by hand -- anchoring on
-	# loudnorm_filter at a fixed indent, then at any indent, then appending to
-	# FILTER_LIST. All three were wrong, and the diagnostic output showed why:
-	#
-	#     FILTER_LIST=$(find_filters_extern libavfilter/allfilters.c)
-	#
-	# FFmpeg 6.0 does not keep a hand-written list. It SCANS allfilters.c for
-	# "extern const AVFilter ff_*" declarations and builds the list from what it
-	# finds. Anything inserted into configure is overwritten by that command a
-	# moment later, which is why the edits appeared to apply and then vanished.
-	#
-	# So step 2 -- adding the extern line to allfilters.c -- already did this
-	# job. CONFIG_LUMENDSP_FILTER is generated from that declaration without any
-	# help. The work here was not merely wrong, it was unnecessary.
-	#
-	# Verified against the declaration rather than against configure, because
-	# that is now the thing that actually determines the outcome.
-	if grep -q "ff_af_lumendsp" libavfilter/allfilters.c; then
-		echo "Lumen: filter declared; configure will derive it from allfilters.c"
-	else
-		echo "Lumen: FAILED - ff_af_lumendsp missing from allfilters.c"
-		exit 1
-	fi
+	# 3. FFmpeg 6.0 derives FILTER_LIST from the extern declarations in
+	# allfilters.c. No manual configure edit is required.
+	echo "Lumen: configure will derive CONFIG_LUMENDSP_FILTER from allfilters.c"
 else
 	echo "Lumen: patches/af_lumendsp.c not found, building without it"
 fi
