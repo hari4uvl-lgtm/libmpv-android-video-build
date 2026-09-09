@@ -48,24 +48,25 @@ if [ -f "$lumen_src" ]; then
 
 	# 3. declare it to configure, so CONFIG_LUMENDSP_FILTER is generated
 	#
-	# MATCHED BY CONTENT, NOT BY INDENTATION.
+	# ANCHORED ON THE LIST ITSELF, NOT ON A FILTER INSIDE IT.
 	#
-	# The first attempt anchored on '^    loudnorm_filter' -- four spaces, from
-	# memory of how FFmpeg formats that list. sed found nothing, reported
-	# success (it always does when a pattern does not match), and the build
-	# stopped at the check below.
+	# Two previous attempts anchored on "loudnorm_filter" -- first assuming four
+	# spaces of indentation, then matching any indentation. Both failed, and the
+	# log finally showed why: loudnorm is a CONDITIONAL filter in FFmpeg 6.0 and
+	# is not in the plain FILTER_LIST at all. There was never a line to find.
 	#
-	# This version finds whatever line actually contains loudnorm_filter and
-	# copies ITS leading whitespace, so it works whether the list is indented
-	# with spaces, tabs, or not at all.
+	# The list itself is what is actually guaranteed to exist. FILTER_LIST is
+	# declared as a shell variable, and appending an entry to it is independent
+	# of which filters happen to be inside it or how the file is formatted.
 	if ! grep -q "lumendsp_filter" configure; then
-		lumen_anchor="$(grep -n '[[:space:]]*loudnorm_filter$' configure | head -1 | cut -d: -f1)"
-		if [ -n "$lumen_anchor" ]; then
-			lumen_indent="$(sed -n "${lumen_anchor}s/\(^[[:space:]]*\).*/\1/p" configure)"
-			sed -i "${lumen_anchor}i\\${lumen_indent}lumendsp_filter" configure
-			echo "Lumen: declared in configure at line $lumen_anchor"
+		if grep -q "^FILTER_LIST=" configure; then
+			# Insert immediately after the opening line of the assignment. The
+			# list is a quoted multi-line string, so the line after the "=" is
+			# inside it whatever it contains.
+			sed -i '/^FILTER_LIST="/a\    lumendsp_filter' configure
+			echo "Lumen: appended to FILTER_LIST"
 		else
-			echo "Lumen: could not find loudnorm_filter in configure"
+			echo "Lumen: FILTER_LIST not found in configure"
 		fi
 	fi
 
@@ -73,8 +74,10 @@ if [ -f "$lumen_src" ]; then
 		echo "Lumen: configure declaration verified"
 	else
 		echo "Lumen: FAILED to declare filter in configure"
-		echo "Lumen: --- filter list context follows ---"
-		grep -n "_filter$" configure | head -20
+		echo "Lumen: --- how the filter list is declared ---"
+		grep -n "FILTER_LIST" configure | head -5
+		echo "Lumen: --- first entries in it ---"
+		grep -n "_filter$" configure | head -10
 		exit 1
 	fi
 else
