@@ -47,12 +47,36 @@ if [ -f "$lumen_src" ]; then
 	fi
 
 	# 3. declare it to configure, so CONFIG_LUMENDSP_FILTER is generated
+	#
+	# MATCHED BY CONTENT, NOT BY INDENTATION.
+	#
+	# The first attempt anchored on '^    loudnorm_filter' -- four spaces, from
+	# memory of how FFmpeg formats that list. sed found nothing, reported
+	# success (it always does when a pattern does not match), and the build
+	# stopped at the check below.
+	#
+	# This version finds whatever line actually contains loudnorm_filter and
+	# copies ITS leading whitespace, so it works whether the list is indented
+	# with spaces, tabs, or not at all.
 	if ! grep -q "lumendsp_filter" configure; then
-		sed -i 's/^    loudnorm_filter/    lumendsp_filter\n    loudnorm_filter/' configure
-		echo "Lumen: declared in configure"
+		lumen_anchor="$(grep -n '[[:space:]]*loudnorm_filter$' configure | head -1 | cut -d: -f1)"
+		if [ -n "$lumen_anchor" ]; then
+			lumen_indent="$(sed -n "${lumen_anchor}s/\(^[[:space:]]*\).*/\1/p" configure)"
+			sed -i "${lumen_anchor}i\\${lumen_indent}lumendsp_filter" configure
+			echo "Lumen: declared in configure at line $lumen_anchor"
+		else
+			echo "Lumen: could not find loudnorm_filter in configure"
+		fi
 	fi
 
-	grep -q "lumendsp_filter" configure || { echo "Lumen: FAILED to declare filter"; exit 1; }
+	if grep -q "lumendsp_filter" configure; then
+		echo "Lumen: configure declaration verified"
+	else
+		echo "Lumen: FAILED to declare filter in configure"
+		echo "Lumen: --- filter list context follows ---"
+		grep -n "_filter$" configure | head -20
+		exit 1
+	fi
 else
 	echo "Lumen: patches/af_lumendsp.c not found, building without it"
 fi
