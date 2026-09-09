@@ -46,38 +46,29 @@ if [ -f "$lumen_src" ]; then
 		echo "Lumen: added to libavfilter/Makefile"
 	fi
 
-	# 3. declare it to configure, so CONFIG_LUMENDSP_FILTER is generated
+	# 3. NOTHING TO DO. configure DERIVES THE LIST ITSELF.
 	#
-	# ANCHORED ON THE LIST ITSELF, NOT ON A FILTER INSIDE IT.
+	# Three attempts were spent editing configure by hand -- anchoring on
+	# loudnorm_filter at a fixed indent, then at any indent, then appending to
+	# FILTER_LIST. All three were wrong, and the diagnostic output showed why:
 	#
-	# Two previous attempts anchored on "loudnorm_filter" -- first assuming four
-	# spaces of indentation, then matching any indentation. Both failed, and the
-	# log finally showed why: loudnorm is a CONDITIONAL filter in FFmpeg 6.0 and
-	# is not in the plain FILTER_LIST at all. There was never a line to find.
+	#     FILTER_LIST=$(find_filters_extern libavfilter/allfilters.c)
 	#
-	# The list itself is what is actually guaranteed to exist. FILTER_LIST is
-	# declared as a shell variable, and appending an entry to it is independent
-	# of which filters happen to be inside it or how the file is formatted.
-	if ! grep -q "lumendsp_filter" configure; then
-		if grep -q "^FILTER_LIST=" configure; then
-			# Insert immediately after the opening line of the assignment. The
-			# list is a quoted multi-line string, so the line after the "=" is
-			# inside it whatever it contains.
-			sed -i '/^FILTER_LIST="/a\    lumendsp_filter' configure
-			echo "Lumen: appended to FILTER_LIST"
-		else
-			echo "Lumen: FILTER_LIST not found in configure"
-		fi
-	fi
-
-	if grep -q "lumendsp_filter" configure; then
-		echo "Lumen: configure declaration verified"
+	# FFmpeg 6.0 does not keep a hand-written list. It SCANS allfilters.c for
+	# "extern const AVFilter ff_*" declarations and builds the list from what it
+	# finds. Anything inserted into configure is overwritten by that command a
+	# moment later, which is why the edits appeared to apply and then vanished.
+	#
+	# So step 2 -- adding the extern line to allfilters.c -- already did this
+	# job. CONFIG_LUMENDSP_FILTER is generated from that declaration without any
+	# help. The work here was not merely wrong, it was unnecessary.
+	#
+	# Verified against the declaration rather than against configure, because
+	# that is now the thing that actually determines the outcome.
+	if grep -q "ff_af_lumendsp" libavfilter/allfilters.c; then
+		echo "Lumen: filter declared; configure will derive it from allfilters.c"
 	else
-		echo "Lumen: FAILED to declare filter in configure"
-		echo "Lumen: --- how the filter list is declared ---"
-		grep -n "FILTER_LIST" configure | head -5
-		echo "Lumen: --- first entries in it ---"
-		grep -n "_filter$" configure | head -10
+		echo "Lumen: FAILED - ff_af_lumendsp missing from allfilters.c"
 		exit 1
 	fi
 else
