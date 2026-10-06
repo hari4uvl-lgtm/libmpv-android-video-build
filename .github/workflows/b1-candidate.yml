@@ -63,7 +63,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: lumine-b1-arm64-baseline
+          name: lumine-b1-arm64-candidate
           path: |
             b1-artifact/
             buildscripts/b1-build.log
