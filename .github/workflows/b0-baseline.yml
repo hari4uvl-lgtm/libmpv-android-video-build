@@ -3,6 +3,9 @@ on:
   push:
     branches: [codex/music-b0-baseline-20261006]
   workflow_dispatch:
+concurrency:
+  group: lumine-b0-baseline
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -29,7 +32,10 @@ jobs:
           set -euxo pipefail
           mkdir -p sdk
           ln -s "$ANDROID_HOME" sdk/android-sdk-linux
-          ./include/download-deps.sh
+          # Omit unused, unpinned encoder/media_kit checkouts from this baseline.
+          sed '/^# libx264/,+1d; /^# media_kit/,+1d' include/download-deps.sh > include/download-b0-deps.sh
+          chmod +x include/download-b0-deps.sh
+          ./include/download-b0-deps.sh
           ./patch.sh
           cp flavors/default.sh scripts/ffmpeg.sh
           ./build.sh --arch arm64 mpv 2>&1 | tee b0-build.log
