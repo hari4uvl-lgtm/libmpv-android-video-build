@@ -1,0 +1,58 @@
+name: Lumine B0 unchanged arm64 baseline
+on:
+  push:
+    branches: [codex/music-b0-baseline-20261006]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake pkg-config libtool ninja-build nasm unzip python3-pip python3-setuptools wget
+          python3 -m pip install 'meson==1.2.3' 'mako==1.2.4'
+          sdkmanager 'ndk;25.2.9519653'
+      - name: Build original configuration, arm64 only
+        working-directory: buildscripts
+        env:
+          TRAVIS: '1'
+        run: |
+          set -euxo pipefail
+          mkdir -p sdk
+          ln -s "$ANDROID_HOME" sdk/android-sdk-linux
+          ./include/download-deps.sh
+          ./patch.sh
+          cp flavors/default.sh scripts/ffmpeg.sh
+          ./build.sh --arch arm64 mpv 2>&1 | tee b0-build.log
+          mkdir -p ../b0-artifact
+          cp prefix/arm64-v8a/lib/libmpv.so ../b0-artifact/libmpv-unstripped.so
+          cp prefix/arm64-v8a/lib/libmpv.so ../b0-artifact/libmpv.so
+          sdk/android-sdk-linux/ndk/25.2.9519653/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-all ../b0-artifact/libmpv.so
+          cp b0-build.log ../b0-artifact/
+          cp include/depinfo.sh ../b0-artifact/
+          for dep in deps/*; do
+            if [ -d "$dep/.git" ]; then
+              printf '%s ' "$dep" >> ../b0-artifact/source-revisions.txt
+              git -C "$dep" rev-parse HEAD >> ../b0-artifact/source-revisions.txt
+              git -C "$dep" diff --stat >> ../b0-artifact/source-revisions.txt
+            fi
+          done
+          sha256sum ../b0-artifact/*.so > ../b0-artifact/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lumine-b0-arm64-baseline
+          path: |
+            b0-artifact/
+            buildscripts/b0-build.log
+            buildscripts/deps/ffmpeg/_build-arm64/ffbuild/config.log
+            buildscripts/deps/mpv/_build-arm64/config.log
