@@ -87,6 +87,7 @@ cpuflags=
 	--disable-nonfree \
 	--enable-version3 \
 	--enable-libsoxr \
+	--extra-libs=-lm \
 	--enable-static \
 	--disable-shared \
 	--disable-vulkan \
