@@ -23,13 +23,14 @@ v_libvpx=1.13
 ## Dependency tree
 # I would've used a dict but putting arrays in a dict is not a thing
 
+dep_libsoxr=()
 dep_mbedtls=()
 dep_dav1d=()
 dep_libvorbis=(libogg)
 if [ -n "${ENCODERS_GPL+x}" ]; then
 	dep_ffmpeg=(mbedtls dav1d libxml2 libvorbis libvpx libx264)
 else
-	dep_ffmpeg=(mbedtls dav1d libxml2)
+	dep_ffmpeg=(mbedtls dav1d libxml2 libsoxr)
 fi
 dep_freetype2=()
 dep_fribidi=()

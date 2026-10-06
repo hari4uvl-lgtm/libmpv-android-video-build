@@ -86,6 +86,7 @@ cpuflags=
 	--disable-gpl \
 	--disable-nonfree \
 	--enable-version3 \
+	--enable-libsoxr \
 	--enable-static \
 	--disable-shared \
 	--disable-vulkan \
@@ -280,6 +281,14 @@ cpuflags=
 	--enable-filter=aresample \
 	--enable-filter=astats \
 	--enable-filter=lumendsp \
+	--enable-filter=alimiter \
+	--enable-filter=volume \
+	--enable-filter=lowshelf \
+	--enable-filter=highshelf \
+	--enable-filter=bass \
+	--enable-filter=treble \
+	--enable-filter=acrossover \
+	--enable-filter=asoftclip \
 	\
 	--enable-protocol=async \
 	--enable-protocol=cache \

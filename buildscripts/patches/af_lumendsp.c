@@ -10,7 +10,7 @@
  * playback is currently clean.
  *
  * A libavfilter filter lives INSIDE that path instead. libavfilter already
- * hands every filter a buffer of float samples, already handles format
+ * hands every filter PCM samples, already handles format
  * negotiation, and mpv already runs a filter chain -- the EQ uses it. So the
  * DSP goes where the audio already is, rather than the audio being routed
  * somewhere new.
@@ -24,21 +24,18 @@
  *     the analyzer problem with no second mechanism
  *
  * ---------------------------------------------------------------------------
- * STAGE 1: THIS FILE PASSES AUDIO THROUGH UNCHANGED.
+ * DSP V2.1 + optional planar-double processing (B1, 2026-10-07)
  * ---------------------------------------------------------------------------
  *
- * Every DSP stage is written and compiled, and every one is inert until its
- * parameter says otherwise. With default options this filter reads samples and
- * writes the same samples.
+ * The original integration proved that the custom filter can live inside mpv's
+ * stable FFmpeg path. V2.1 keeps that architecture and tightens correctness:
+ * runtime option changes refresh their derived state, fixed tone frequencies are
+ * clamped below Nyquist, the default limiter ceiling is safer, and peak_out is
+ * measured after width/mono and limiting rather than before them.
  *
- * That is deliberate. The risky part of this work is not the mathematics of a
- * biquad -- it is whether a custom filter can sit in mpv's chain on four ABIs
- * without disturbing playback. Testing that with an empty filter means a
- * failure points at one thing. Testing it with a full engine means debugging
- * the engine and the integration at once.
- *
- * Build it, put it in the chain, listen. If it is clean, the hard part is done
- * and the stages below are arithmetic on a file already proven to work.
+ * This source still uses the existing zero-lookahead sample-peak limiter. A
+ * lookahead/true-peak limiter belongs in a separately measured native build, not
+ * in an unverified source-only patch.
  *
  * Target: FFmpeg 6.0 (new channel layout API, FILTER_INPUTS macros).
  */
@@ -250,6 +247,39 @@ static inline double lumen_biquad_run(LumenBiquad *bq, int ch, double in)
     return out;
 }
 
+/* Keep fixed tone frequencies comfortably below Nyquist. */
+static double lumen_safe_freq(double requested, int sample_rate)
+{
+    if (sample_rate <= 0)
+        return requested;
+    const double max_f = (double)sample_rate * 0.45;
+    return requested < max_f ? requested : max_f;
+}
+
+static void lumen_refresh_derived(LumenDSPContext *s, int reset_state)
+{
+    s->preamp_lin = pow(10.0, s->preamp_db / 20.0);
+
+    if (s->sample_rate > 0) {
+        const double bass_f = lumen_safe_freq(120.0, s->sample_rate);
+        const double treble_f = lumen_safe_freq(8000.0, s->sample_rate);
+
+        lumen_set_lowshelf(&s->tone_low, s->sample_rate, bass_f,
+                           s->bass_db, 0.707);
+        lumen_set_highshelf(&s->tone_high, s->sample_rate, treble_f,
+                            s->treble_db, 0.707);
+
+        if (reset_state) {
+            lumen_biquad_reset(&s->tone_low);
+            lumen_biquad_reset(&s->tone_high);
+        }
+
+        s->tone_low.active  = fabs(s->bass_db)   > 0.01;
+        s->tone_high.active = fabs(s->treble_db) > 0.01;
+        s->lim_release = 1.0 - exp(-1.0 / (0.100 * (double)s->sample_rate));
+    }
+}
+
 /* ------------------------------------------------------------- lifecycle */
 
 static int lumen_config_input(AVFilterLink *inlink)
@@ -271,20 +301,10 @@ static int lumen_config_input(AVFilterLink *inlink)
      * wrong place, by the ratio of the rates. Files here are 44.1, 48, 96 and
      * higher, so this has to come from the link.
      */
-    s->preamp_lin     = pow(10.0, s->preamp_db / 20.0);
+    lumen_refresh_derived(s, 1);
     s->preamp_current = s->preamp_lin;
 
-    lumen_set_lowshelf(&s->tone_low,  s->sample_rate, 120.0,  s->bass_db,   0.707);
-    lumen_set_highshelf(&s->tone_high, s->sample_rate, 8000.0, s->treble_db, 0.707);
-    lumen_biquad_reset(&s->tone_low);
-    lumen_biquad_reset(&s->tone_high);
-
-    s->tone_low.active  = fabs(s->bass_db)   > 0.01;
-    s->tone_high.active = fabs(s->treble_db) > 0.01;
-
     s->lim_env = 1.0;
-    /* 100 ms release, expressed per sample at THIS rate. */
-    s->lim_release = 1.0 - exp(-1.0 / (0.100 * (double)s->sample_rate));
     s->peak_out = 0.0;
 
     return 0;
@@ -292,39 +312,8 @@ static int lumen_config_input(AVFilterLink *inlink)
 
 /* ------------------------------------------------------------- processing */
 
-static int lumen_filter_frame(AVFilterLink *inlink, AVFrame *in)
+static void lumen_samples_float(LumenDSPContext *s, AVFrame *in)
 {
-    AVFilterContext *ctx     = inlink->dst;
-    LumenDSPContext *s       = ctx->priv;
-    AVFilterLink    *outlink = ctx->outputs[0];
-
-    /*
-     * TRUE BYPASS, AND IT IS THE FIRST THING CHECKED.
-     *
-     * Disabled means the frame is forwarded untouched -- not processed with
-     * neutral settings, not copied, not converted. The samples that arrive are
-     * the samples that leave, and the only cost is this comparison.
-     *
-     * That matters because "DSP off" must genuinely mean off. A bypass that
-     * still runs the chain with unity gain is not bypass; it is processing that
-     * happens to be inaudible today.
-     */
-    if (!s->enabled)
-        return ff_filter_frame(outlink, in);
-
-    /*
-     * WRITABLE IN PLACE WHERE POSSIBLE.
-     *
-     * av_frame_make_writable copies only when the buffer is shared. Processing
-     * in place avoids an allocation and a copy per frame in the common case,
-     * which on the audio thread is worth having.
-     */
-    int ret = av_frame_make_writable(in);
-    if (ret < 0) {
-        av_frame_free(&in);
-        return ret;
-    }
-
     const int nb    = in->nb_samples;
     const int nch   = s->channels;
     float **data    = (float **)in->extended_data;
@@ -342,8 +331,6 @@ static int lumen_filter_frame(AVFilterLink *inlink, AVFrame *in)
      */
     const double target = s->preamp_lin;
 
-    double peak = 0.0;
-
     for (int i = 0; i < nb; i++) {
         s->preamp_current += (target - s->preamp_current) * 0.0005;
 
@@ -358,9 +345,6 @@ static int lumen_filter_frame(AVFilterLink *inlink, AVFrame *in)
             for (int b = 0; b < s->band_count; b++)
                 if (s->bands[b].enabled)
                     v = lumen_biquad_run(&s->bands[b].bq, ch, v);
-
-            const double a = fabs(v);
-            if (a > peak) peak = a;
 
             data[ch][i] = (float)v;
         }
@@ -437,7 +421,176 @@ static int lumen_filter_frame(AVFilterLink *inlink, AVFrame *in)
         }
     }
 
-    s->peak_out = peak;
+    /* Real output peak: measured AFTER width/mono and AFTER the limiter. */
+    double peak_out = 0.0;
+    for (int i = 0; i < nb; i++) {
+        for (int ch = 0; ch < nch; ch++) {
+            const double a = fabs((double)data[ch][i]);
+            if (a > peak_out) peak_out = a;
+        }
+    }
+    s->peak_out = peak_out;
+
+}
+
+static void lumen_samples_double(LumenDSPContext *s, AVFrame *in)
+{
+    const int nb    = in->nb_samples;
+    const int nch   = s->channels;
+    double **data   = (double **)in->extended_data;
+
+    /*
+     * PLANAR DOUBLE ONLY -- guaranteed by the format negotiation below, so this
+     * loop can index planes directly with no per-sample branch on layout.
+     */
+
+    /* Preamp, smoothed toward its target across the frame.
+     *
+     * A step change in gain is a discontinuity in the waveform, which is
+     * audible as a click. Approaching the target geometrically over a few
+     * hundred samples makes it inaudible without needing a ramp schedule.
+     */
+    const double target = s->preamp_lin;
+
+    for (int i = 0; i < nb; i++) {
+        s->preamp_current += (target - s->preamp_current) * 0.0005;
+
+        for (int ch = 0; ch < nch; ch++) {
+            double v = (double)data[ch][i] * s->preamp_current;
+
+            if (s->tone_low.active)
+                v = lumen_biquad_run(&s->tone_low, ch, v);
+            if (s->tone_high.active)
+                v = lumen_biquad_run(&s->tone_high, ch, v);
+
+            for (int b = 0; b < s->band_count; b++)
+                if (s->bands[b].enabled)
+                    v = lumen_biquad_run(&s->bands[b].bq, ch, v);
+
+            data[ch][i] = (double)v;
+        }
+    }
+
+    /* Stereo width, only when stereo and only when asked for. */
+    if (nch == 2 && (s->mono || fabs(s->width - 1.0) > 0.001)) {
+        const double w = s->mono ? 0.0 : s->width;
+        for (int i = 0; i < nb; i++) {
+            const double l = data[0][i];
+            const double r = data[1][i];
+            const double mid  = (l + r) * 0.5;
+            const double side = (l - r) * 0.5 * w;
+            data[0][i] = (double)(mid + side);
+            data[1][i] = (double)(mid - side);
+        }
+    }
+
+    /*
+     * Limiter: gain reduction with a fast attack and slow release.
+     *
+     * NOT a clipper. A clipper flattens the peak and generates harmonics across
+     * the spectrum; this reduces gain smoothly so the waveform keeps its shape.
+     * It engages only when a sample would exceed the ceiling, so material that
+     * never approaches it is untouched.
+     *
+     * No lookahead in this version, which means the very first sample of a
+     * transient can pass before the envelope responds. Lookahead would fix that
+     * and costs latency; it is deliberately left for later.
+     */
+    if (s->limiter) {
+        const double ceiling = s->limiter_ceiling;
+
+        /*
+         * INSTANT ATTACK, TIMED RELEASE.
+         *
+         * THE FIRST VERSION OF THIS DID NOT WORK, AND THE TEST CAUGHT IT.
+         *
+         * It eased the gain down over ~100 samples. Against a burst peaking at
+         * 1.6 the measured output peak was 1.594 -- the entire transient passed
+         * before the envelope had moved. A limiter that lets the peak through
+         * is not a limiter; it is a slow volume control.
+         *
+         * Reducing gain the instant it is needed guarantees the ceiling is
+         * never exceeded. Without lookahead that is the only way: there is no
+         * future sample to anticipate, so the response has to be immediate.
+         *
+         * The cost is that a single sample can be attenuated sharply, which is
+         * a mild distortion on very fast transients. Lookahead trades latency
+         * to avoid it and is deliberately left for later.
+         *
+         * Release is a TIME CONSTANT, converted to a per-sample coefficient
+         * from the real rate. A fixed per-sample number would make recovery
+         * twice as fast at 96 kHz as at 48 -- the same music behaving
+         * differently depending on the file.
+         */
+        for (int i = 0; i < nb; i++) {
+            double m = 0.0;
+            for (int ch = 0; ch < nch; ch++) {
+                const double a = fabs((double)data[ch][i]);
+                if (a > m) m = a;
+            }
+
+            const double needed = (m > ceiling) ? ceiling / m : 1.0;
+
+            if (needed < s->lim_env)
+                s->lim_env = needed;                      /* immediate */
+            else
+                s->lim_env += (needed - s->lim_env) * s->lim_release;
+
+            if (s->lim_env < 1.0)
+                for (int ch = 0; ch < nch; ch++)
+                    data[ch][i] = (double)((double)data[ch][i] * s->lim_env);
+        }
+    }
+
+    /* Real output peak: measured AFTER width/mono and AFTER the limiter. */
+    double peak_out = 0.0;
+    for (int i = 0; i < nb; i++) {
+        for (int ch = 0; ch < nch; ch++) {
+            const double a = fabs((double)data[ch][i]);
+            if (a > peak_out) peak_out = a;
+        }
+    }
+    s->peak_out = peak_out;
+
+}
+
+static int lumen_filter_frame(AVFilterLink *inlink, AVFrame *in)
+{
+    AVFilterContext *ctx     = inlink->dst;
+    LumenDSPContext *s       = ctx->priv;
+    AVFilterLink    *outlink = ctx->outputs[0];
+
+    /*
+     * TRUE BYPASS, AND IT IS THE FIRST THING CHECKED.
+     *
+     * Disabled means the frame is forwarded untouched -- not processed with
+     * neutral settings, not copied, not converted. The samples that arrive are
+     * the samples that leave, and the only cost is this comparison.
+     *
+     * That matters because "DSP off" must genuinely mean off. A bypass that
+     * still runs the chain with unity gain is not bypass; it is processing that
+     * happens to be inaudible today.
+     */
+    if (!s->enabled)
+        return ff_filter_frame(outlink, in);
+
+    /*
+     * WRITABLE IN PLACE WHERE POSSIBLE.
+     *
+     * av_frame_make_writable copies only when the buffer is shared. Processing
+     * in place avoids an allocation and a copy per frame in the common case,
+     * which on the audio thread is worth having.
+     */
+    int ret = av_frame_make_writable(in);
+    if (ret < 0) {
+        av_frame_free(&in);
+        return ret;
+    }
+
+    if (in->format == AV_SAMPLE_FMT_DBLP)
+        lumen_samples_double(s, in);
+    else
+        lumen_samples_float(s, in);
 
     return ff_filter_frame(outlink, in);
 }
@@ -455,6 +608,7 @@ static int lumen_filter_frame(AVFilterLink *inlink, AVFrame *in)
  */
 static const enum AVSampleFormat lumen_sample_fmts[] = {
     AV_SAMPLE_FMT_FLTP,
+    AV_SAMPLE_FMT_DBLP,
     AV_SAMPLE_FMT_NONE,
 };
 
@@ -475,7 +629,7 @@ static const AVOption lumendsp_options[] = {
     { "limiter", "enable the output limiter",
       OFFSET(limiter), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS },
     { "ceiling", "limiter ceiling, linear",
-      OFFSET(limiter_ceiling), AV_OPT_TYPE_DOUBLE, {.dbl = 0.98}, 0.1, 1.0, FLAGS },
+      OFFSET(limiter_ceiling), AV_OPT_TYPE_DOUBLE, {.dbl = 0.891}, 0.1, 1.0, FLAGS },
     { "width", "stereo width; 1.0 is unchanged",
       OFFSET(width), AV_OPT_TYPE_DOUBLE, {.dbl = 1.0}, 0.0, 2.0, FLAGS },
     { "mono", "collapse to mono",
@@ -484,6 +638,30 @@ static const AVOption lumendsp_options[] = {
 };
 
 AVFILTER_DEFINE_CLASS(lumendsp);
+
+/*
+ * Runtime AVOptions need their derived DSP state rebuilt too. The generic
+ * FFmpeg handler updates preamp_db/bass_db/treble_db, but it does not know that
+ * those values feed precomputed linear gain and biquad coefficients. Without
+ * this wrapper a runtime command can report success while the sound does not
+ * change.
+ *
+ * Filter history is intentionally preserved for runtime tone changes. Resetting
+ * x/y state on every small slider move creates a discontinuity that is more
+ * audible than retaining the state while coefficients change.
+ */
+static int lumen_process_command(AVFilterContext *ctx, const char *cmd,
+                                 const char *args, char *res, int res_len,
+                                 int flags)
+{
+    LumenDSPContext *s = ctx->priv;
+    const int ret = ff_filter_process_command(ctx, cmd, args, res, res_len, flags);
+    if (ret < 0)
+        return ret;
+
+    lumen_refresh_derived(s, 0);
+    return ret;
+}
 
 static const AVFilterPad lumendsp_inputs[] = {
     {
@@ -510,5 +688,5 @@ const AVFilter ff_af_lumendsp = {
     FILTER_OUTPUTS(lumendsp_outputs),
     FILTER_SAMPLEFMTS_ARRAY(lumen_sample_fmts),
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
-    .process_command = ff_filter_process_command,
+    .process_command = lumen_process_command,
 };
