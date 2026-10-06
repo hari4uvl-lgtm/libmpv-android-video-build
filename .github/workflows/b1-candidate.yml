@@ -51,7 +51,7 @@ jobs:
           cp b1-build.log ../b1-artifact/
           cp include/depinfo.sh ../b1-artifact/
           cp patches/af_lumendsp.c ../b1-artifact/
-          cp deps/ffmpeg/libavfilter/filter_list.c ../b1-artifact/
+          cp deps/ffmpeg/_build-arm64/libavfilter/filter_list.c ../b1-artifact/
           for dep in deps/*; do
             if [ -d "$dep/.git" ]; then
               printf '%s ' "$dep" >> ../b1-artifact/source-revisions.txt
