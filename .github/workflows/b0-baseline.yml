@@ -23,7 +23,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y autoconf automake pkg-config libtool ninja-build nasm unzip python3-pip python3-setuptools wget
           python3 -m pip install 'meson==1.2.3' 'mako==1.2.4'
-          sdkmanager 'ndk;25.2.9519653'
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'ndk;25.2.9519653'
       - name: Build original configuration, arm64 only
         working-directory: buildscripts
         env:
