@@ -11,3 +11,4 @@ cmake -S . -B "_build$ndk_suffix" \
   -DWITH_LSR_BINDINGS=OFF -DWITH_DEV_TRACE=OFF
 cmake --build "_build$ndk_suffix" -j "$cores"
 DESTDIR="$prefix_dir" cmake --install "_build$ndk_suffix"
+sed -i 's/^Libs.private:.*/Libs.private: -lm/' "$prefix_dir/lib/pkgconfig/soxr.pc"
