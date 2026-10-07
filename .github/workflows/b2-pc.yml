@@ -42,7 +42,7 @@ jobs:
           if [ "$TARGET" = windows ]; then
             cross=(--enable-cross-compile --target-os=mingw32 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32- --extra-ldflags=-static)
           fi
-          ./configure "${cross[@]}" --disable-everything --disable-autodetect --disable-network --disable-doc --disable-asm --disable-debug --disable-ffplay --enable-ffmpeg --enable-ffprobe --enable-protocol=file --enable-demuxer=wav,flac,mp3,mov,f64le,f32le --enable-decoder=pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,mp3,mp3float,aac,flac --enable-parser=mpegaudio,aac,flac --enable-encoder=pcm_f64le,pcm_f32le,pcm_s16le --enable-muxer=f64le,f32le,wav --enable-filter=lumenout,alimiter,aresample,volume,anull,ametadata,asendcmd,ashowinfo,equalizer,bass,treble
+          ./configure "${cross[@]}" --disable-everything --disable-autodetect --disable-network --disable-doc --disable-asm --disable-debug --disable-ffplay --enable-ffmpeg --enable-ffprobe --enable-protocol=file --enable-demuxer=wav,flac,mp3,mov,f64le,f32le --enable-decoder=pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,mp3,mp3float,aac,flac --enable-parser=mpegaudio,aac,ac3,flac --enable-encoder=pcm_f64le,pcm_f32le,pcm_s16le --enable-muxer=f64le,f32le,wav --enable-filter=lumenout,alimiter,aresample,volume,anull,ametadata,asendcmd,ashowinfo,equalizer,bass,treble
           make -j2
           mkdir -p ../b2-pc-artifact
           if [ "$TARGET" = windows ]; then
