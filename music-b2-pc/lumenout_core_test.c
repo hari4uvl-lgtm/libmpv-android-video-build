@@ -120,6 +120,31 @@ int main(void) {
     for(int n=0;n<5000*2;n++) if(fabs(neutral_out[n])>maximum_neutral) maximum_neutral=fabs(neutral_out[n]);
     CHECK(maximum_neutral>1.99);
     lumenout_destroy(s);
+    /* Mute must also silence already-delayed PCM and crossover histories,
+     * not just prevent new input. Exercise every optional configuration. */
+    for (int bands=1;bands<=2;bands++) for(int clip=0;clip<=1;clip++) {
+        s=lumenout_create(48000,2,3); CHECK(s);
+        CHECK(lumenout_configure_bands(s,bands)==0);
+        CHECK(lumenout_configure_clip(s,clip)==0);
+        for(int n=0;n<5000;n++) {
+            neutral_in[2*n]=.1*sin(2*3.14159265358979323846*997*n/48000);
+            neutral_in[2*n+1]=-.7*neutral_in[2*n];
+        }
+        lumenout_process(s,neutral_in,neutral_out,5000,&m);
+        CHECK(lumenout_set_muted(s,1)==0);
+        lumenout_process(s,neutral_in,neutral_out,5000,&m);
+        for(int n=0;n<10000;n++) CHECK(neutral_out[n]==0);
+        CHECK(lumenout_set_volume(s,-12)==0);
+        lumenout_process(s,neutral_in,neutral_out,5000,&m);
+        for(int n=0;n<10000;n++) CHECK(neutral_out[n]==0);
+        CHECK(lumenout_set_muted(s,0)==0);
+        lumenout_process(s,neutral_in,neutral_out,5000,&m);
+        for(int n=0;n<10000;n++) CHECK(isfinite(neutral_out[n]));
+        double unmute_peak=0;
+        for(int n=5000;n<10000;n++) unmute_peak=fmax(unmute_peak,fabs(neutral_out[n]));
+        CHECK(unmute_peak>.01 && unmute_peak<.04);
+        lumenout_destroy(s);
+    }
     /* Every supported rate and channel count, silence and invalid samples. */
     for (i = 0; i < 4; i++) for(int bands=1;bands<=2;bands++) for(int clip=0;clip<=1;clip++) {
         int rates[] = {8000, 44100, 48000, 192000};

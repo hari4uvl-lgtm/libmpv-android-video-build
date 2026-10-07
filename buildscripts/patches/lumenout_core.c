@@ -438,7 +438,10 @@ void lumenout_process(LumenOut *s, const double *input, double *output,
         gain=s->gain;
         for (c = 0; c < s->channels; c++) {
             double y = s->ring[(size_t)read * s->channels + c] * gain;
-            if (fabs(y) < 1e-30) y = 0;
+            /* The output mute gate also silences delayed samples and the
+             * optional crossover's numerical tail. Keep histories running so
+             * unmute retains the existing ramp and continuous filter state. */
+            if (s->muted || fabs(y) < 1e-30) y = 0;
             output[(size_t)i * s->channels + c] = y;
             s->output_history[c][s->history_pos] = y;
             s->output_history[c][s->history_pos+12] = y;
