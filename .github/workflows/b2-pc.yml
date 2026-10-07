@@ -25,7 +25,7 @@ jobs:
       - name: Sanitizer checks
         if: matrix.target == 'linux'
         run: |
-          gcc -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wextra -Werror -I music-b2-pc music-b2-pc/lumenout_core.c music-b2-pc/lumenout_core_test.c -lm -o core-test
+          gcc -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wextra -Werror -I music-b2-pc music-b2-pc/lumenout_core.c music-b2-pc/lumenout_bands.c music-b2-pc/lumenout_clip.c music-b2-pc/lumenout_core_test.c -lm -o core-test
           ./core-test
       - name: Pinned FFmpeg 6.0 host build
         env:
@@ -34,9 +34,9 @@ jobs:
           set -euxo pipefail
           git clone --depth 1 --branch n6.0 https://github.com/FFmpeg/FFmpeg.git ffmpeg
           test "$(git -C ffmpeg rev-parse HEAD)" = ea3d24bbe3c58b171e55fe2151fc7ffaca3ab3d2
-          cp music-b2-pc/af_lumenout.c music-b2-pc/lumenout_core.c music-b2-pc/lumenout_core.h ffmpeg/libavfilter/
+          cp music-b2-pc/af_lumenout.c music-b2-pc/lumenout_*.c music-b2-pc/lumenout_*.h ffmpeg/libavfilter/
           sed -i '/extern const AVFilter ff_af_ladspa;/a extern const AVFilter ff_af_lumenout;' ffmpeg/libavfilter/allfilters.c
-          echo 'OBJS-$(CONFIG_LUMENOUT_FILTER) += af_lumenout.o lumenout_core.o' >> ffmpeg/libavfilter/Makefile
+          echo 'OBJS-$(CONFIG_LUMENOUT_FILTER) += af_lumenout.o lumenout_core.o lumenout_bands.o lumenout_clip.o' >> ffmpeg/libavfilter/Makefile
           cd ffmpeg
           cross=()
           if [ "$TARGET" = windows ]; then

@@ -67,6 +67,17 @@ else
 	echo "Lumen: patches/af_lumendsp.c not found, building without it"
 fi
 
+# Lumen B2 isolated music output stage
+lumenout_src="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/patches"
+for source in af_lumenout.c lumenout_core.c lumenout_core.h lumenout_bands.c lumenout_bands.h lumenout_clip.c lumenout_clip.h; do
+    cp "$lumenout_src/$source" "libavfilter/$source"
+done
+sed -i '/^[[:space:]]*extern const AVFilter ff_af_lumenout;[[:space:]]*$/d' libavfilter/allfilters.c
+sed -i '/^[[:space:]]*extern const AVFilter ff_af_ladspa;/a extern const AVFilter ff_af_lumenout;' libavfilter/allfilters.c
+if ! grep -q 'af_lumenout.o' libavfilter/Makefile; then
+    echo 'OBJS-$(CONFIG_LUMENOUT_FILTER) += af_lumenout.o lumenout_core.o lumenout_bands.o lumenout_clip.o' >> libavfilter/Makefile
+fi
+
 mkdir -p _build$ndk_suffix
 cd _build$ndk_suffix
 
@@ -282,6 +293,7 @@ cpuflags=
 	--enable-filter=aresample \
 	--enable-filter=astats \
 	--enable-filter=lumendsp \
+	--enable-filter=lumenout \
 	--enable-filter=alimiter \
 	--enable-filter=volume \
 	--enable-filter=lowshelf \

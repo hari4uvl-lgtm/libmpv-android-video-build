@@ -22,9 +22,16 @@ int main(void) {
     CHECK(lumenout_set_ceiling(s, 1) < 0);
     CHECK(lumenout_set_release(s, 299) < 0);
     CHECK(lumenout_set_knee(s, -1) < 0);
+    CHECK(lumenout_configure_bands(s,3)<0);
+    CHECK(lumenout_configure_clip(s,2)<0);
+    CHECK(lumenout_prime_volume(s,-6)==0);
+    CHECK(lumenout_prime_volume(s,0)==0);
     delay = lumenout_latency(s);
     for (i = 0; i < total; i++) { input[2*i] = .1; input[2*i+1] = -.07; }
     lumenout_process(s, input, output, command, &m);
+    CHECK(lumenout_prime_volume(s,0)<0);
+    CHECK(lumenout_configure_bands(s,2)<0);
+    CHECK(lumenout_configure_clip(s,1)<0);
     CHECK(m.gr_db == 0 && m.gr_avg == 0);
     CHECK(lumenout_set_volume(s, -6) == 0);
     /* Changing derived release/knee state must not reset the delay line. */
@@ -44,12 +51,14 @@ int main(void) {
     }
     lumenout_destroy(s); free(input); free(output);
     /* Every supported rate and channel count, silence and invalid samples. */
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 4; i++) for(int bands=1;bands<=2;bands++) for(int clip=0;clip<=1;clip++) {
         int rates[] = {8000, 44100, 48000, 192000};
         double x[8] = {NAN, INFINITY, -INFINITY, 0, 0, 0, 0, 0}, y[8];
         int n;
         s = lumenout_create(rates[i], 8, 8); CHECK(s);
-        for (n = 0; n < 2000; n++) {
+        CHECK(lumenout_configure_bands(s,bands)==0);
+        CHECK(lumenout_configure_clip(s,clip)==0);
+        for (n = 0; n < lumenout_latency(s)+32; n++) {
             lumenout_process(s, x, y, 1, &m);
             for (int c = 0; c < 8; c++) CHECK(y[c] == 0);
             CHECK(isfinite(m.tp_out) && isfinite(m.gr_db));
