@@ -10,7 +10,8 @@ typedef struct LumenOutMeter {
 } LumenOutMeter;
 
 /* Configuration-time allocations only. Runtime setters preserve audio history.
- * Latency: lookahead + 12 samples (FIR centre plus detector safety overlap).
+ * Candidate latency: lookahead + 70 samples (long guard plus safety overlap).
+ * The additional guard is required by failed near-Nyquist boundary tests.
  * Core is single-thread-owned; serialize commands with processing.
  */
 LumenOut *lumenout_create(int rate, int channels, double lookahead_ms);

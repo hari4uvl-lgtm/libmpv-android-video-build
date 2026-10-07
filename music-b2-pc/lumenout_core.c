@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define MAX_CHANNELS 8
+#define GUARD_TAPS 128
 static const double fir[12][4] = {
  { .001708984375,-.0291748046875,-.0189208984375,-.00830078125 },
  { .010986328125,.029296875,.0330810546875,.014892578125 },
@@ -24,12 +25,14 @@ static const double fir[12][4] = {
 };
 
 struct LumenOut {
-    int rate, channels, delay, capacity, write, history_pos;
+    int rate, channels, delay, capacity, write, history_pos, guard_pos;
     int queue_capacity, head, tail, hold;
     int64_t clock;
     double *ring, *peaks;
     int64_t *times;
     double history[MAX_CHANNELS][12], output_history[MAX_CHANNELS][12];
+    double guard_history[MAX_CHANNELS][GUARD_TAPS];
+    double guard_fir[4][GUARD_TAPS];
     double volume, volume_target, volume_step;
     int volume_left;
     double ceiling_db, release_ms, knee_db, gain_db, energy, attack;
@@ -40,6 +43,31 @@ static double gain_to_db(double x) { return 20.0 * log10(fmax(x, 1e-30)); }
 static int finite_range(double x, double low, double high) {
     return isfinite(x) && x >= low && x <= high;
 }
+static double bessel_i0(double x) {
+    double sum = 1, term = 1;
+    int n;
+    for (n = 1; n < 40; n++) {
+        term *= x*x/(4*n*n); sum += term;
+        if (term < sum*1e-16) break;
+    }
+    return sum;
+}
+static void prepare_guard(LumenOut *s) {
+    int phase, tap;
+    const double pi = 3.14159265358979323846;
+    for (phase = 0; phase < 4; phase++) {
+        double norm = 0;
+        for (tap = 0; tap < GUARD_TAPS; tap++) {
+            double distance = tap-63.0-phase/4.0;
+            double position = distance/64;
+            double window = fabs(position) < 1 ? bessel_i0(9*sqrt(1-position*position))/bessel_i0(9) : 0;
+            double sinc = fabs(distance) < 1e-12 ? 1 : sin(pi*distance)/(pi*distance);
+            s->guard_fir[phase][tap] = sinc*window;
+            norm += s->guard_fir[phase][tap];
+        }
+        for (tap = 0; tap < GUARD_TAPS; tap++) s->guard_fir[phase][tap] /= norm;
+    }
+}
 
 LumenOut *lumenout_create(int rate, int channels, double lookahead_ms) {
     LumenOut *s;
@@ -48,7 +76,11 @@ LumenOut *lumenout_create(int rate, int channels, double lookahead_ms) {
     s = calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->rate = rate; s->channels = channels;
-    s->delay = (int)ceil(rate * lookahead_ms / 1000.0) + 12;
+    /* The short standard meter under-reads finite near-Nyquist boundaries.
+     * Supplement it with a longer full-band interpolator; never globally
+     * remove those frequencies from the actual audio signal.
+     */
+    s->delay = (int)ceil(rate * lookahead_ms / 1000.0) + GUARD_TAPS/2 + 6;
     s->capacity = s->delay + 1;
     /* Hold a complete 40 Hz period: avoid release between bass crests. */
     s->hold = (int)ceil(rate * .025);
@@ -60,6 +92,7 @@ LumenOut *lumenout_create(int rate, int channels, double lookahead_ms) {
     s->volume = s->volume_target = 1;
     s->ceiling_db = -1; s->release_ms = 500; s->knee_db = 1;
     s->attack = exp(-8.0 / (rate * lookahead_ms / 1000.0));
+    prepare_guard(s);
     return s;
 }
 void lumenout_destroy(LumenOut *s) {
@@ -132,8 +165,16 @@ void lumenout_process(LumenOut *s, const double *input, double *output,
             x *= s->volume;
             s->ring[(size_t)s->write * s->channels + c] = x;
             s->history[c][s->history_pos] = x;
+            s->guard_history[c][s->guard_pos] = x;
             peak = fmax(peak, fabs(x));
             peak = fmax(peak, interpolated_peak(s->history[c], s->history_pos));
+            for (int phase = 0; phase < 4; phase++) {
+                double reconstructed = 0;
+                for (int tap = 0; tap < GUARD_TAPS; tap++)
+                    reconstructed += s->guard_fir[phase][tap] *
+                        s->guard_history[c][(s->guard_pos+GUARD_TAPS-tap) % GUARD_TAPS];
+                peak = fmax(peak, fabs(reconstructed));
+            }
             energy += x * x;
         }
         s->energy = energy_a * s->energy + (1 - energy_a) * energy / s->channels;
@@ -167,6 +208,7 @@ void lumenout_process(LumenOut *s, const double *input, double *output,
         }
         gr_max = fmax(gr_max, -s->gain_db); gr_sum -= s->gain_db;
         s->write = read; s->history_pos = (s->history_pos + 1) % 12;
+        s->guard_pos = (s->guard_pos + 1) % GUARD_TAPS;
     }
     if (meter) {
         meter->gr_db = gr_max; meter->gr_avg = frames ? gr_sum / frames : 0;
