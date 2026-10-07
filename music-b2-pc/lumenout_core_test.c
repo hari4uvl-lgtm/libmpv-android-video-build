@@ -86,6 +86,40 @@ int main(void) {
     lumenout_process(s,neutral_in,neutral_out,5000,&m);
     for(int n=4500*2;n<5000*2;n++) CHECK(neutral_out[n]==0);
     lumenout_destroy(s);
+    /* A lowered runtime ceiling must not interpret conservative quiet-input
+     * bounds as actual peaks, nor reset the signal history. */
+    s=lumenout_create(48000,2,3); CHECK(s);
+    for(int n=0;n<5000;n++) {
+        neutral_in[2*n]=.1*sin(2*3.14159265358979323846*1000*n/48000);
+        neutral_in[2*n+1]=-neutral_in[2*n];
+    }
+    lumenout_process(s,neutral_in,neutral_out,5000,&m);
+    CHECK(lumenout_set_ceiling(s,-6)==0);
+    CHECK(lumenout_set_knee(s,2)==0);
+    for(int block=0;block<4;block++) {
+        lumenout_process(s,neutral_in,neutral_out,5000,&m);
+        CHECK(m.gr_db==0 && m.gr_avg==0);
+        for(int n=0;n<5000*2;n++) CHECK(fabs(neutral_out[n])<=.100000000001);
+    }
+    /* Enable protection before a boost: after settling, hot input is limited;
+     * disabling protection must release back to the original level. */
+    CHECK(lumenout_set_protection(s,0)==0);
+    lumenout_process(s,neutral_in,neutral_out,5000,&m);
+    CHECK(lumenout_set_protection(s,1)==0);
+    for(int n=0;n<5000;n++) {
+        neutral_in[2*n]=2*sin(2*3.14159265358979323846*1000*n/48000);
+        neutral_in[2*n+1]=-neutral_in[2*n];
+    }
+    for(int block=0;block<10;block++) lumenout_process(s,neutral_in,neutral_out,5000,&m);
+    CHECK(m.gr_db>6);
+    for(int n=0;n<5000*2;n++) CHECK(fabs(neutral_out[n])<pow(10,-6.0/20));
+    CHECK(lumenout_set_protection(s,0)==0);
+    for(int block=0;block<20;block++) lumenout_process(s,neutral_in,neutral_out,5000,&m);
+    CHECK(m.gr_db<.001);
+    double maximum_neutral=0;
+    for(int n=0;n<5000*2;n++) if(fabs(neutral_out[n])>maximum_neutral) maximum_neutral=fabs(neutral_out[n]);
+    CHECK(maximum_neutral>1.99);
+    lumenout_destroy(s);
     /* Every supported rate and channel count, silence and invalid samples. */
     for (i = 0; i < 4; i++) for(int bands=1;bands<=2;bands++) for(int clip=0;clip<=1;clip++) {
         int rates[] = {8000, 44100, 48000, 192000};

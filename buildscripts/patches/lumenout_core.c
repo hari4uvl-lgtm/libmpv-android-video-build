@@ -6,6 +6,9 @@
 #include "lumenout_bands.h"
 #include "lumenout_clip.h"
 #include <math.h>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -42,6 +45,9 @@ struct LumenOut {
     double history[MAX_CHANNELS][24], output_history[MAX_CHANNELS][24];
     double guard_history[MAX_CHANNELS][GUARD_TAPS*2];
     double guard_fir[4][GUARD_TAPS];
+#if defined(__aarch64__)
+    double guard_phase[GUARD_TAPS][4];
+#endif
     double guard_error_norm;
     double short_error_norm, short_dc;
     double guard_threshold, gain, fast_release, slow_release;
@@ -88,6 +94,9 @@ static void prepare_guard(LumenOut *s) {
             norm += s->guard_fir[phase][tap];
         }
         for (tap = 0; tap < GUARD_TAPS; tap++) s->guard_fir[phase][tap] /= norm;
+#if defined(__aarch64__)
+        for (tap=0;tap<GUARD_TAPS;tap++) s->guard_phase[tap][phase]=s->guard_fir[phase][tap];
+#endif
         /* Let h be the exact long kernel, a the two-point interpolator and
          * F[k]=sum_{j<=k}(h[j]-a[j]). Since sum(h-a)=0, its convolution error
          * is bounded by max|x[n]-x[n-1]| * sum|F[k]| (summation by parts).
@@ -257,6 +266,35 @@ int lumenout_set_knee(LumenOut *s, double db) {
     schedule_requested(s);
     return 0;
 }
+#if defined(__aarch64__)
+/* SIMD lanes are independent interpolation phases. Each phase retains its
+ * original tap order; no precision reduction or fast-math reassociation. */
+static double phase_max(float64x2_t a,float64x2_t b) {
+    double peak=0;
+    peak=fmax(peak,fabs(vgetq_lane_f64(a,0)));
+    peak=fmax(peak,fabs(vgetq_lane_f64(a,1)));
+    peak=fmax(peak,fabs(vgetq_lane_f64(b,0)));
+    return fmax(peak,fabs(vgetq_lane_f64(b,1)));
+}
+static double interpolated_peak(const double *history,int pos) {
+    float64x2_t a=vdupq_n_f64(0),b=vdupq_n_f64(0);
+    for(int tap=0;tap<12;tap++) {
+        double x=history[pos+12-tap];
+        a=vfmaq_n_f64(a,vld1q_f64(&fir[tap][0]),x);
+        b=vfmaq_n_f64(b,vld1q_f64(&fir[tap][2]),x);
+    }
+    return phase_max(a,b);
+}
+static double long_peak(const LumenOut *s,const double *history,int pos) {
+    float64x2_t a=vdupq_n_f64(0),b=vdupq_n_f64(0);
+    for(int tap=0;tap<GUARD_TAPS;tap++) {
+        double x=history[pos+GUARD_TAPS-tap];
+        a=vfmaq_n_f64(a,vld1q_f64(&s->guard_phase[tap][0]),x);
+        b=vfmaq_n_f64(b,vld1q_f64(&s->guard_phase[tap][2]),x);
+    }
+    return phase_max(a,b);
+}
+#else
 static double interpolated_peak(const double *history, int pos) {
     double peak = 0;
     int phase, tap;
@@ -268,6 +306,7 @@ static double interpolated_peak(const double *history, int pos) {
     }
     return peak;
 }
+#endif
 static double maximum_difference(DifferenceWindow *s,int64_t clock,double value) {
     const int capacity=GUARD_TAPS+1;
     while(s->head!=s->tail && s->time[s->head]<clock-(GUARD_TAPS-2))
@@ -360,6 +399,9 @@ void lumenout_process(LumenOut *s, const double *input, double *output,
             // limiting crest leaves the window, so they cannot change release.
             int exact=s->protection && (s->gain_db<0 || s->full_guard_samples>0 || bound>=s->guard_threshold);
             if(!exact) peak=fmax(peak,bound);
+#if defined(__aarch64__)
+            if(exact) peak=fmax(peak,long_peak(s,s->guard_history[c],s->guard_pos));
+#else
             for (int phase = 0; exact && phase < 4; phase++) {
                 double reconstructed = 0;
                 for (int tap = 0; tap < GUARD_TAPS; tap++)
@@ -367,6 +409,7 @@ void lumenout_process(LumenOut *s, const double *input, double *output,
                         s->guard_history[c][s->guard_pos+GUARD_TAPS-tap];
                 peak = fmax(peak, fabs(reconstructed));
             }
+#endif
             energy += x * x;
         }
         s->energy = energy_a * s->energy + (1 - energy_a) * energy / s->channels;
