@@ -26,6 +26,8 @@ int lumenout_set_volume(LumenOut *s, double db);
 int lumenout_set_ceiling(LumenOut *s, double db);
 int lumenout_set_release(LumenOut *s, double ms);
 int lumenout_set_knee(LumenOut *s, double db);
+int lumenout_set_protection(LumenOut *s, int enabled);
+int lumenout_set_muted(LumenOut *s, int muted);
 void lumenout_process(LumenOut *s, const double *input, double *output,
                       int frames, LumenOutMeter *meter);
 #endif

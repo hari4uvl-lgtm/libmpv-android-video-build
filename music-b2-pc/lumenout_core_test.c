@@ -22,6 +22,8 @@ int main(void) {
     CHECK(lumenout_set_ceiling(s, 1) < 0);
     CHECK(lumenout_set_release(s, 299) < 0);
     CHECK(lumenout_set_knee(s, -1) < 0);
+    CHECK(lumenout_set_protection(s,2)<0);
+    CHECK(lumenout_set_muted(s,-1)<0);
     CHECK(lumenout_configure_bands(s,3)<0);
     CHECK(lumenout_configure_clip(s,2)<0);
     CHECK(lumenout_prime_volume(s,-6)==0);
@@ -50,6 +52,40 @@ int main(void) {
         CHECK(fabs(output[2*i+1]+.7*expected) < 1e-13);
     }
     lumenout_destroy(s); free(input); free(output);
+    /* Neutral processing must preserve a hot master, not lower flat EQ/DSP. */
+    s=lumenout_create(48000,2,3); CHECK(s);
+    CHECK(lumenout_set_protection(s,0)==0);
+    double neutral_in[5000*2], neutral_out[5000*2];
+    for(int n=0;n<5000;n++) {
+        neutral_in[n*2]=.999*sin(2*3.14159265358979323846*1000*n/48000);
+        neutral_in[n*2+1]=-neutral_in[n*2];
+    }
+    delay=lumenout_latency(s);
+    lumenout_process(s,neutral_in,neutral_out,5000,&m);
+    for(int n=delay;n<5000;n++) {
+        CHECK(neutral_out[n*2]==neutral_in[(n-delay)*2]);
+        CHECK(neutral_out[n*2+1]==neutral_in[(n-delay)*2+1]);
+    }
+    CHECK(m.gr_db==0);
+    lumenout_destroy(s);
+    /* Mute is exactly zero; volume commands while muted cannot unmute it. */
+    s=lumenout_create(48000,2,3); CHECK(s);
+    CHECK(lumenout_set_protection(s,0)==0);
+    CHECK(lumenout_prime_volume(s,-6)==0);
+    CHECK(lumenout_set_muted(s,1)==0);
+    for(int n=0;n<5000*2;n++) neutral_in[n]=.1;
+    lumenout_process(s,neutral_in,neutral_out,5000,&m);
+    for(int n=0;n<5000*2;n++) CHECK(neutral_out[n]==0);
+    CHECK(lumenout_set_volume(s,-12)==0);
+    lumenout_process(s,neutral_in,neutral_out,5000,&m);
+    for(int n=0;n<5000*2;n++) CHECK(neutral_out[n]==0);
+    CHECK(lumenout_set_muted(s,0)==0);
+    lumenout_process(s,neutral_in,neutral_out,5000,&m);
+    for(int n=4500*2;n<5000*2;n++) CHECK(fabs(neutral_out[n]-.1*pow(10,-12.0/20))<1e-13);
+    CHECK(lumenout_set_muted(s,1)==0);
+    lumenout_process(s,neutral_in,neutral_out,5000,&m);
+    for(int n=4500*2;n<5000*2;n++) CHECK(neutral_out[n]==0);
+    lumenout_destroy(s);
     /* Every supported rate and channel count, silence and invalid samples. */
     for (i = 0; i < 4; i++) for(int bands=1;bands<=2;bands++) for(int clip=0;clip<=1;clip++) {
         int rates[] = {8000, 44100, 48000, 192000};

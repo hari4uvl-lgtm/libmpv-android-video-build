@@ -12,7 +12,7 @@
 typedef struct LumenOutContext {
     const AVClass *class;
     double volume, ceiling, lookahead, release, knee;
-    int bands, clip;
+    int bands, clip, protection, muted;
     LumenOut *core;
     int trim, pad, draining, started;
     int64_t next_pts;
@@ -30,6 +30,8 @@ static const AVOption lumenout_options[] = {
     {"knee", "soft knee width in dB", OFFSET(knee), AV_OPT_TYPE_DOUBLE, {.dbl=1}, 0, 6, LIVE},
     {"bands", "1=wideband, 2=LR4 bass/vocal protection; configuration only", OFFSET(bands), AV_OPT_TYPE_INT, {.i64=1}, 1, 2, AF},
     {"clip", "optional tiny 4x soft clip; configuration only", OFFSET(clip), AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, AF},
+    {"protect", "enable peak protection; neutral playback can preserve its level", OFFSET(protection), AV_OPT_TYPE_BOOL, {.i64=1}, 0, 1, LIVE},
+    {"mute", "exact digital mute; smooth runtime ramp", OFFSET(muted), AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, LIVE},
     {NULL}
 };
 AVFILTER_DEFINE_CLASS(lumenout);
@@ -40,6 +42,8 @@ static int config_input(AVFilterLink *inlink) {
     s->core = lumenout_create(inlink->sample_rate, inlink->ch_layout.nb_channels, s->lookahead);
     if (!s->core) return AVERROR(ENOMEM);
     lumenout_prime_volume(s->core, s->volume);
+    lumenout_set_muted(s->core,s->muted);
+    lumenout_set_protection(s->core,s->protection);
     lumenout_set_ceiling(s->core, s->ceiling);
     lumenout_set_release(s->core, s->release);
     lumenout_set_knee(s->core, s->knee);
@@ -94,6 +98,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in) {
     av_dict_set(&in->metadata, "lavfi.lumenout.clip_db", value, 0);
     snprintf(value, sizeof(value), "%" PRIu64, ++s->sequence);
     av_dict_set(&in->metadata, "lavfi.lumenout.sequence", value, 0);
+    av_dict_set(&in->metadata, "lavfi.lumenout.protect", s->protection ? "1" : "0", 0);
+    av_dict_set(&in->metadata, "lavfi.lumenout.muted", s->muted ? "1" : "0", 0);
     return ff_filter_frame(outlink, in);
 }
 
@@ -119,6 +125,8 @@ static int process_command(AVFilterContext *ctx, const char *cmd, const char *ar
     if (!strcmp(cmd, "ceiling")) return lumenout_set_ceiling(s->core, s->ceiling);
     if (!strcmp(cmd, "release")) return lumenout_set_release(s->core, s->release);
     if (!strcmp(cmd, "knee")) return lumenout_set_knee(s->core, s->knee);
+    if (!strcmp(cmd, "protect")) return lumenout_set_protection(s->core,s->protection);
+    if (!strcmp(cmd, "mute")) return lumenout_set_muted(s->core,s->muted);
     return ret;
 }
 static av_cold void uninit(AVFilterContext *ctx) {
