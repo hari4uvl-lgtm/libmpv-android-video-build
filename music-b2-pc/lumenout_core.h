@@ -1,0 +1,27 @@
+/* Lumine music output stage. SPDX-License-Identifier: LGPL-2.1-or-later */
+#ifndef LUMENOUT_CORE_H
+#define LUMENOUT_CORE_H
+#include <stdint.h>
+
+typedef struct LumenOut LumenOut;
+typedef struct LumenOutMeter {
+    double gr_db, gr_avg, tp_out;
+    uint64_t samples;
+} LumenOutMeter;
+
+/* Configuration-time allocations only. Runtime setters preserve audio history.
+ * Latency: lookahead + 12 samples (FIR centre plus detector safety overlap).
+ * Core is single-thread-owned; serialize commands with processing.
+ */
+LumenOut *lumenout_create(int rate, int channels, double lookahead_ms);
+void lumenout_destroy(LumenOut *s);
+int lumenout_latency(const LumenOut *s);
+/* Initial graph level must not ramp from unity, especially for quiet DVC. */
+int lumenout_prime_volume(LumenOut *s, double db);
+int lumenout_set_volume(LumenOut *s, double db);
+int lumenout_set_ceiling(LumenOut *s, double db);
+int lumenout_set_release(LumenOut *s, double ms);
+int lumenout_set_knee(LumenOut *s, double db);
+void lumenout_process(LumenOut *s, const double *input, double *output,
+                      int frames, LumenOutMeter *meter);
+#endif

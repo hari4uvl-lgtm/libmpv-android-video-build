@@ -1,0 +1,61 @@
+/* Meaningful runtime-state checks for the isolated portable core. */
+#include "lumenout_core.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define CHECK(x) do { if (!(x)) { fprintf(stderr, "failed line %d: %s\n", __LINE__, #x); return 1; } } while (0)
+int main(void) {
+    LumenOut *s = lumenout_create(48000, 2, 3);
+    LumenOutMeter m;
+    const int total = 5000, command = 2000, ramp = 1200;
+    double *input = calloc(total * 2, sizeof(double));
+    double *output = calloc(total * 2, sizeof(double));
+    int i, delay;
+    double target = pow(10, -6.0 / 20);
+    CHECK(s && input && output);
+    CHECK(!lumenout_create(0, 2, 3));
+    CHECK(!lumenout_create(48000, 9, 3));
+    CHECK(!lumenout_create(48000, 2, NAN));
+    CHECK(lumenout_set_volume(s, NAN) < 0);
+    CHECK(lumenout_set_volume(s, 13) < 0);
+    CHECK(lumenout_set_ceiling(s, 1) < 0);
+    CHECK(lumenout_set_release(s, 299) < 0);
+    CHECK(lumenout_set_knee(s, -1) < 0);
+    delay = lumenout_latency(s);
+    for (i = 0; i < total; i++) { input[2*i] = .1; input[2*i+1] = -.07; }
+    lumenout_process(s, input, output, command, &m);
+    CHECK(m.gr_db == 0 && m.gr_avg == 0);
+    CHECK(lumenout_set_volume(s, -6) == 0);
+    /* Changing derived release/knee state must not reset the delay line. */
+    CHECK(lumenout_set_release(s, 600) == 0);
+    CHECK(lumenout_set_knee(s, 2) == 0);
+    lumenout_process(s, input + 2*command, output + 2*command, total-command, &m);
+    for (i = 0; i < total; i++) {
+        int source = i-delay;
+        double v = 1, expected;
+        if (source >= command) {
+            int position = source-command+1;
+            v = position < ramp ? 1+(target-1)*position/ramp : target;
+        }
+        expected = source < 0 ? 0 : .1*v;
+        CHECK(fabs(output[2*i]-expected) < 1e-13);
+        CHECK(fabs(output[2*i+1]+.7*expected) < 1e-13);
+    }
+    lumenout_destroy(s); free(input); free(output);
+    /* Every supported rate and channel count, silence and invalid samples. */
+    for (i = 0; i < 4; i++) {
+        int rates[] = {8000, 44100, 48000, 192000};
+        double x[8] = {NAN, INFINITY, -INFINITY, 0, 0, 0, 0, 0}, y[8];
+        int n;
+        s = lumenout_create(rates[i], 8, 8); CHECK(s);
+        for (n = 0; n < 2000; n++) {
+            lumenout_process(s, x, y, 1, &m);
+            for (int c = 0; c < 8; c++) CHECK(y[c] == 0);
+            CHECK(isfinite(m.tp_out) && isfinite(m.gr_db));
+        }
+        lumenout_destroy(s);
+    }
+    puts("PASS: volume ramp, stereo linking, runtime history, invalid commands, finite output, rates/channels");
+    return 0;
+}

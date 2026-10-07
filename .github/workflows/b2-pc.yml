@@ -1,0 +1,64 @@
+name: Lumine B2 isolated PC qualification tools
+on:
+  push:
+    branches: [codex/music-b2-qualification-20261007]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: lumine-b2-pc
+  cancel-in-progress: true
+jobs:
+  host:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux, windows]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host tools only
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 make pkg-config
+      - name: Sanitizer checks
+        if: matrix.target == 'linux'
+        run: |
+          gcc -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wextra -Werror -I music-b2-pc music-b2-pc/lumenout_core.c music-b2-pc/lumenout_core_test.c -lm -o core-test
+          ./core-test
+      - name: Pinned FFmpeg 6.0 host build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch n6.0 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+          test "$(git -C ffmpeg rev-parse HEAD)" = ea3d24bbe3c58b171e55fe2151fc7ffaca3ab3d2
+          cp music-b2-pc/af_lumenout.c music-b2-pc/lumenout_core.c music-b2-pc/lumenout_core.h ffmpeg/libavfilter/
+          sed -i '/extern const AVFilter ff_af_ladspa;/a extern const AVFilter ff_af_lumenout;' ffmpeg/libavfilter/allfilters.c
+          echo 'OBJS-$(CONFIG_LUMENOUT_FILTER) += af_lumenout.o lumenout_core.o' >> ffmpeg/libavfilter/Makefile
+          cd ffmpeg
+          cross=()
+          if [ "$TARGET" = windows ]; then
+            cross=(--enable-cross-compile --target-os=mingw32 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32- --extra-ldflags=-static)
+          fi
+          ./configure "${cross[@]}" --disable-everything --disable-autodetect --disable-network --disable-doc --disable-asm --disable-debug --disable-ffplay --enable-ffmpeg --enable-ffprobe --enable-protocol=file --enable-demuxer=wav,flac,mp3,mov,f64le,f32le --enable-decoder=pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,mp3,mp3float,aac,flac --enable-parser=mpegaudio,aac,flac --enable-encoder=pcm_f64le,pcm_f32le,pcm_s16le --enable-muxer=f64le,f32le,wav --enable-filter=lumenout,alimiter,aresample,volume,anull,ametadata,asendcmd,ashowinfo,equalizer,bass,treble
+          make -j2
+          mkdir -p ../b2-pc-artifact
+          if [ "$TARGET" = windows ]; then
+            cp ffmpeg.exe ffprobe.exe ../b2-pc-artifact/
+          else
+            cp ffmpeg ffprobe ../b2-pc-artifact/
+            ./ffmpeg -hide_banner -h filter=lumenout > ../b2-pc-artifact/lumenout-options.txt 2>&1
+          fi
+          cp config.h config_components.h ffbuild/config.log ../b2-pc-artifact/
+          git rev-parse HEAD > ../b2-pc-artifact/ffmpeg-revision.txt
+          cd ..
+          sha256sum music-b2-pc/* > b2-pc-artifact/SOURCE_SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lumine-b2-pc-${{ matrix.target }}
+          path: |
+            b2-pc-artifact/
+            ffmpeg/ffbuild/config.log
