@@ -7,6 +7,7 @@
 #include "lumenout_core.h"
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 
 typedef struct LumenOutContext {
     const AVClass *class;
@@ -15,6 +16,7 @@ typedef struct LumenOutContext {
     LumenOut *core;
     int trim, pad, draining, started;
     int64_t next_pts;
+    uint64_t sequence;
 } LumenOutContext;
 
 #define OFFSET(x) offsetof(LumenOutContext, x)
@@ -45,6 +47,7 @@ static int config_input(AVFilterLink *inlink) {
     if (lumenout_configure_clip(s->core,s->clip)<0) return AVERROR(ENOMEM);
     s->trim = lumenout_latency(s->core); s->pad = 0;
     s->draining = s->started = 0; s->next_pts = AV_NOPTS_VALUE;
+    s->sequence=0;
     return 0;
 }
 
@@ -89,6 +92,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in) {
     av_dict_set(&in->metadata, "lavfi.lumenout.gr_high", value, 0);
     snprintf(value, sizeof(value), "%.9f", m.clip_db);
     av_dict_set(&in->metadata, "lavfi.lumenout.clip_db", value, 0);
+    snprintf(value, sizeof(value), "%" PRIu64, ++s->sequence);
+    av_dict_set(&in->metadata, "lavfi.lumenout.sequence", value, 0);
     return ff_filter_frame(outlink, in);
 }
 
