@@ -1,0 +1,39 @@
+name: Lumine isolated band budget qualification
+on:
+  push:
+    branches: [codex/music-band-budget-20261009]
+    paths: [music-band-budget-pc/**, .github/workflows/music-band-budget-pc.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: lumine-music-band-budget-pc
+  cancel-in-progress: true
+jobs:
+  host-tools:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: Baseline and optional band-budget variants only
+        run: |
+          set -euxo pipefail
+          mkdir -p band-tools
+          common="-O2 -Wall -Wextra -Werror -static"
+          x86_64-w64-mingw32-gcc $common -I music-b2-pc music-b2-pc/lumenout_core.c music-b2-pc/lumenout_bands.c music-b2-pc/lumenout_clip.c music-b2-pc/lumenout_host.c -lm -o band-tools/baseline-host.exe
+          for fraction in 25 50 75 100; do
+            if [ "$fraction" = 100 ]; then value=1.0; else value=0.$fraction; fi
+            x86_64-w64-mingw32-gcc $common -DLUMEN_BUDGET_FLOOR=$value -I music-band-budget-pc music-band-budget-pc/lumenout_core.c music-band-budget-pc/lumenout_bands.c music-band-budget-pc/lumenout_clip.c music-band-budget-pc/lumenout_host.c -lm -o band-tools/budget-$fraction-host.exe
+            gcc -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -DLUMEN_BUDGET_FLOOR=$value -Wall -Wextra -Werror -I music-band-budget-pc music-band-budget-pc/lumenout_core.c music-band-budget-pc/lumenout_bands.c music-band-budget-pc/lumenout_clip.c music-band-budget-pc/lumenout_core_test.c -lm -o band-tools/check-$fraction
+            ./band-tools/check-$fraction
+          done
+          sha256sum music-b2-pc/lumenout* music-band-budget-pc/* > band-tools/SOURCE_SHA256SUMS
+          sha256sum band-tools/*.exe > band-tools/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumine-band-budget-host-tools
+          path: band-tools/
