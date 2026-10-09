@@ -1,0 +1,39 @@
+name: Lumine paired band budget qualification
+on:
+  push:
+    branches: [codex/music-band-budget-20261009]
+    paths: [music-band-paired-pc/**, .github/workflows/music-band-paired-pc.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: lumine-music-band-paired-pc
+  cancel-in-progress: true
+jobs:
+  host-tools:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: Baseline and paired allowance variants only
+        run: |
+          set -euxo pipefail
+          mkdir -p paired-tools
+          common="-O2 -Wall -Wextra -Werror -static"
+          x86_64-w64-mingw32-gcc $common -I music-b2-pc music-b2-pc/lumenout_core.c music-b2-pc/lumenout_bands.c music-b2-pc/lumenout_clip.c music-b2-pc/lumenout_host.c -lm -o paired-tools/baseline-host.exe
+          for reserve in 0 5 10; do
+            if [ "$reserve" = 5 ]; then value=0.5; elif [ "$reserve" = 10 ]; then value=1.0; else value=0.0; fi
+            x86_64-w64-mingw32-gcc $common -DLUMEN_PAIRED_RESERVE_DB=$value -I music-band-paired-pc music-band-paired-pc/lumenout_core.c music-band-paired-pc/lumenout_bands.c music-band-paired-pc/lumenout_clip.c music-band-paired-pc/lumenout_host.c -lm -o paired-tools/paired-$reserve-host.exe
+            gcc -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -DLUMEN_PAIRED_RESERVE_DB=$value -Wall -Wextra -Werror -I music-band-paired-pc music-band-paired-pc/lumenout_core.c music-band-paired-pc/lumenout_bands.c music-band-paired-pc/lumenout_clip.c music-band-paired-pc/lumenout_core_test.c -lm -o paired-tools/check-$reserve
+            ./paired-tools/check-$reserve
+          done
+          sha256sum music-b2-pc/lumenout* music-band-paired-pc/* > paired-tools/SOURCE_SHA256SUMS
+          sha256sum paired-tools/*.exe > paired-tools/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumine-band-paired-host-tools
+          path: paired-tools/
