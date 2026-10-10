@@ -1,0 +1,3 @@
+# Keep the new PC tooling portable; existing source line-ending rules stay as-is.
+/music-full-chain-pc/** text eol=lf
+/.github/workflows/music-full-chain-pc.yml text eol=lf
