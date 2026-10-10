@@ -46,9 +46,12 @@ if [ "$target" = windows ]; then
   suffix=.exe
   cross=(--enable-cross-compile --target-os=mingw32 --arch=x86_64 \
          --cross-prefix=x86_64-w64-mingw32-)
+  # CMAKE_AR/RANLIB are FILEPATH cache entries: a bare name is made relative
+  # to the checkout by CMake, unlike the C compiler's PATH lookup.
   cmake_cross=(-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
-    -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
-    -DCMAKE_AR=x86_64-w64-mingw32-ar -DCMAKE_RANLIB=x86_64-w64-mingw32-ranlib)
+    "-DCMAKE_C_COMPILER=$(command -v x86_64-w64-mingw32-gcc)" \
+    "-DCMAKE_AR=$(command -v x86_64-w64-mingw32-ar)" \
+    "-DCMAKE_RANLIB=$(command -v x86_64-w64-mingw32-ranlib)")
 fi
 "$compiler" --version > "$artifact/provenance/compiler.txt"
 cmake --version > "$artifact/provenance/cmake.txt"
