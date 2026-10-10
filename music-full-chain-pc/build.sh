@@ -66,6 +66,27 @@ cmake -S "$build/soxr-0.1.3-Source" -B "$build/soxr-build" \
   -DWITH_LSR_BINDINGS=OFF -DWITH_DEV_TRACE=OFF
 cmake --build "$build/soxr-build" --parallel 2
 cmake --install "$build/soxr-build"
+# Upstream SoX installs pkg-config metadata only when NOT WIN32. Its static
+# Windows library/header are already built; describe those actual outputs for
+# FFmpeg's pkg-config probe without patching the dependency's source/build.
+if [ "$target" = windows ]; then
+  python3 - "$prefix" <<'PY'
+from pathlib import Path
+import re
+import sys
+prefix = Path(sys.argv[1])
+header = (prefix / 'include/soxr.h').read_text()
+version = re.search(r'^#define SOXR_THIS_VERSION_STR\s+"([^"]+)"', header, re.M)[1]
+assert version == '0.1.3'
+directory = prefix / 'lib/pkgconfig'
+directory.mkdir(exist_ok=True)
+path = directory / 'soxr.pc'
+assert not path.exists()
+path.write_text('Name: soxr\nDescription: SoX resampler static PC build\n'
+                f'Version: {version}\nLibs: -L{prefix}/lib -lsoxr\n'
+                f'Cflags: -I{prefix}/include\n')
+PY
+fi
 printf 'Libs.private: -lm\n' >> "$prefix/lib/pkgconfig/soxr.pc"
 cp "$build/soxr-build/CMakeCache.txt" "$artifact/provenance/soxr-CMakeCache.txt"
 cp "$prefix/lib/pkgconfig/soxr.pc" "$artifact/provenance/"
